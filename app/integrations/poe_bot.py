@@ -25,8 +25,8 @@ _HELP_TEXT = """\
 class DesignyPoeBot(fp.PoeBot):
     """Poe bot for AMZ_Designy pipeline control."""
 
-    def __init__(self, config: AppConfig) -> None:
-        super().__init__()
+    def __init__(self, config: AppConfig, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._config = config
 
     async def get_response(
