@@ -1,0 +1,16 @@
+# Qoder / VSCode-like workspace stuff
+.qoder/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Tests / tooling caches
+.pytest_cache/
+
+# Logs
+*.log
+
+# Env secrets
+.env
