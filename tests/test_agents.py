@@ -108,8 +108,17 @@ class TestTrendScoutAgent:
         agent = TrendScoutAgent(config)
 
         mock_client = MagicMock()
+        # trending_searches now returns TrendReport instead of list
         mock_client.trending_searches = AsyncMock(
-            return_value=["funny cat shirt", "retro gaming tee"],
+            return_value=TrendReport(
+                entries=[
+                    TrendEntry(query="funny cat shirt", source="google_trends"),
+                    TrendEntry(query="retro gaming tee", source="google_trends"),
+                ],
+                geo="US",
+                timeframe="today 1-m",
+                created_at=datetime.now(),
+            ),
         )
         mock_client.related_queries = AsyncMock(return_value=["pixel art tee"])
         mock_client.interest_over_time = AsyncMock(return_value=(50000, 25.0))
@@ -131,7 +140,15 @@ class TestTrendScoutAgent:
         agent = TrendScoutAgent(config)
 
         mock_client = MagicMock()
-        mock_client.trending_searches = AsyncMock(return_value=[])
+        # trending_searches returns empty TrendReport (degraded mode)
+        mock_client.trending_searches = AsyncMock(
+            return_value=TrendReport(
+                entries=[],
+                geo="US",
+                timeframe="today 1-m",
+                created_at=datetime.now(),
+            ),
+        )
         mock_client.related_queries = AsyncMock(return_value=[])
         mock_client.interest_over_time = AsyncMock(return_value=(0, 0.0))
         agent._pytrends = mock_client
@@ -146,7 +163,14 @@ class TestTrendScoutAgent:
         agent = TrendScoutAgent(config)
 
         mock_client = MagicMock()
-        mock_client.trending_searches = AsyncMock(return_value=["test query"])
+        mock_client.trending_searches = AsyncMock(
+            return_value=TrendReport(
+                entries=[TrendEntry(query="test query", source="google_trends")],
+                geo="US",
+                timeframe="today 1-m",
+                created_at=datetime.now(),
+            ),
+        )
         mock_client.related_queries = AsyncMock(return_value=[])
         mock_client.interest_over_time = AsyncMock(side_effect=Exception("API error"))
         agent._pytrends = mock_client

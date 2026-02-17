@@ -28,22 +28,30 @@ class TrendScoutAgent:
         """Run trend discovery for the given seed keywords.
 
         Returns a TrendReport with up to 20 entries.
+        Uses robust pytrends client with fallback strategies.
         """
         entries: list[TrendEntry] = []
 
-        # 1. Trending searches (country-level)
-        trending = await self._pytrends.trending_searches(geo)
-        for query in trending[:10]:
-            entries.append(TrendEntry(query=query, source="google_trends"))
+        # 1. Trending searches (country-level) - now returns TrendReport directly
+        trending_report = await self._pytrends.trending_searches(geo, seed_keywords)
+        entries.extend(trending_report.entries[:10])
+        logger.info(
+            "Trending searches returned %d entries (source: %s)",
+            len(trending_report.entries),
+            trending_report.entries[0].source if trending_report.entries else "none"
+        )
 
         # 2. Related queries for each seed keyword
         for kw in seed_keywords:
-            related = await self._pytrends.related_queries(kw, geo, timeframe)
-            for query in related:
-                if not any(e.query == query for e in entries):
-                    entries.append(
-                        TrendEntry(query=query, source="google_trends"),
-                    )
+            try:
+                related = await self._pytrends.related_queries(kw, geo, timeframe)
+                for query in related:
+                    if not any(e.query == query for e in entries):
+                        entries.append(
+                            TrendEntry(query=query, source="google_trends"),
+                        )
+            except Exception as e:
+                logger.warning("Failed to get related queries for '%s': %s", kw, e)
 
         # 3. Enrich entries with volume / growth data
         enriched: list[TrendEntry] = []
