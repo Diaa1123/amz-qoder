@@ -24,8 +24,9 @@ _DEFAULT_SEEDS = [
 
 
 async def run_daily(config: AppConfig) -> NicheReport:
-    """Daily pipeline: TrendScout -> NicheAnalyzer -> Airtable Weekly Niche.
+    """Daily pipeline: TrendScout -> NicheAnalyzer -> Output -> Airtable Weekly Niche.
 
+    Writes outputs to disk before Airtable write to preserve artifacts.
     Returns the NicheReport.
     """
     run_date = date.today()
@@ -33,6 +34,7 @@ async def run_daily(config: AppConfig) -> NicheReport:
 
     scout = TrendScoutAgent(config)
     analyzer = NicheAnalyzerAgent(config)
+    writer = OutputWriter(config)
     airtable = AirtableClient(config)
 
     trend_report = await scout.discover_trends(seed_keywords=_DEFAULT_SEEDS)
@@ -40,20 +42,26 @@ async def run_daily(config: AppConfig) -> NicheReport:
         trend_report, min_score=config.min_niche_score,
     )
 
+    # Write outputs to disk BEFORE Airtable (preserve artifacts on failure)
+    await writer.write_daily_report(run_date, trend_report, niche_report)
+
     # Derive week start (Monday of current week)
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
 
+    airtable_success = 0
     for entry in niche_report.entries:
         try:
             await airtable.write_weekly_niche(entry, week_start)
+            airtable_success += 1
         except Exception:
             logger.exception(
                 "Failed to write niche '%s' to Airtable", entry.niche_name,
             )
 
     logger.info(
-        "Daily pipeline done: %d niches written", len(niche_report.entries),
+        "Daily pipeline done: %d niches analyzed, %d written to Airtable",
+        len(niche_report.entries), airtable_success,
     )
     return niche_report
 

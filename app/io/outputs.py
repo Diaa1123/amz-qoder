@@ -24,11 +24,65 @@ class OutputWriter:
     """Write structured local output packages to disk."""
 
     def __init__(self, config: AppConfig) -> None:
-        self._output_dir = config.output_dir
+        self._output_dir = Path(config.output_dir)
 
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
+
+    async def write_daily_report(
+        self,
+        run_date: date,
+        trend_report: TrendReport,
+        niche_report: NicheReport,
+    ) -> Path:
+        """Write daily pipeline reports to disk.
+
+        Returns the path to the daily report directory.
+        """
+        out_dir = self._output_dir / "daily" / run_date.isoformat()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write JSON artifacts
+        self._write_json(out_dir / "trend_report.json", trend_report)
+        self._write_json(out_dir / "niche_report.json", niche_report)
+
+        # Write summary text
+        self._write_daily_summary(run_date, trend_report, niche_report, out_dir)
+
+        logger.info("Daily report written to %s", out_dir)
+        return out_dir
+
+    def _write_daily_summary(
+        self,
+        run_date: date,
+        trend_report: TrendReport,
+        niche_report: NicheReport,
+        out_dir: Path,
+    ) -> None:
+        """Write human-readable daily summary."""
+        lines = [
+            f"DAILY TREND REPORT - {run_date.isoformat()}",
+            "",
+            f"Geo: {trend_report.geo}",
+            f"Timeframe: {trend_report.timeframe}",
+            f"Trends Discovered: {len(trend_report.entries)}",
+            f"Niches Analyzed: {len(niche_report.entries)}",
+            "",
+            "=== TREND ENTRIES ===",
+        ]
+        for entry in trend_report.entries:
+            source_info = f" [{entry.source}]" if entry.source else ""
+            lines.append(f"  - {entry.query}{source_info}")
+
+        lines.extend([
+            "",
+            "=== NICHE ENTRIES ===",
+        ])
+        for entry in niche_report.entries:
+            lines.append(f"  - {entry.niche_name} (score: {entry.score.opportunity_score:.2f})")
+
+        (out_dir / "summary.txt").write_text("\n".join(lines), encoding="utf-8")
 
     async def write_package(
         self,

@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
+from app.agents.niche_analyzer import NicheAnalyzerAgent
+from app.agents.trend_scout import TrendScoutAgent
 from app.integrations.airtable_client import AirtableClient
 from app.integrations.pytrends_client import PytrendsClient, DEFAULT_SEED_KEYWORDS
 from app.schemas import (
@@ -15,6 +17,7 @@ from app.schemas import (
     DesignPrompt,
     IdeaPackage,
     NicheEntry,
+    NicheReport,
     NicheScore,
     TrendEntry,
     TrendReport,
@@ -351,3 +354,134 @@ class TestAirtableClient:
         assert "Niche Name" in call_args
         assert "Weekly Growth %" in call_args
         assert "Rising Status" in call_args
+
+
+# ---------------------------------------------------------------------------
+# Integration: Degraded Mode -> NicheAnalyzer
+# ---------------------------------------------------------------------------
+
+class TestDegradedModeIntegration:
+    """Test that degraded mode (seed keywords) produces valid NicheReport."""
+
+    @pytest.mark.asyncio
+    @patch("app.integrations.pytrends_client.TrendReq")
+    @patch("app.agents.niche_analyzer.PoeClient")
+    async def test_degraded_mode_produces_valid_niche_report(
+        self, MockPoe: MagicMock, MockTrendReq: MagicMock
+    ):
+        """End-to-end test: degraded mode TrendReport -> NicheAnalyzer -> valid NicheReport.
+
+        This ensures that even when pytrends completely fails and we fall back
+        to seed keywords, the pipeline doesn't crash and produces valid output.
+        """
+        from pytrends.exceptions import ResponseError
+
+        # Setup: Mock pytrends to fail completely (triggers degraded mode)
+        mock_response = MagicMock()
+        mock_instance = MockTrendReq.return_value
+        mock_instance.trending_searches.side_effect = ResponseError(
+            "404 error", mock_response
+        )
+        mock_instance.daily_trends.side_effect = ResponseError(
+            "API error", mock_response
+        )
+        mock_instance.related_queries.return_value = []
+        mock_instance.interest_over_time.return_value = (0, 0.0)
+
+        # Setup: Mock LLM for NicheAnalyzer
+        mock_poe = MockPoe.return_value
+        mock_poe.call_llm_text = AsyncMock(
+            return_value='{"audience": "General consumers", "summary": "Good niche"}',
+        )
+
+        # Create config
+        config = MagicMock()
+        config.min_niche_score = 0.0  # Accept all for this test
+        config.llm_model = "gpt-4o"
+        config.max_tokens = 4000
+        config.temperature = 0.7
+
+        # Run TrendScout (will use degraded mode)
+        scout = TrendScoutAgent(config)
+        custom_seeds = ["funny cat shirt", "retro gaming tee"]
+        trend_report = await scout.discover_trends(
+            seed_keywords=custom_seeds, geo="US"
+        )
+
+        # Verify: TrendReport is valid and contains seed keywords
+        assert isinstance(trend_report, TrendReport)
+        assert len(trend_report.entries) == 2
+        assert trend_report.entries[0].query == "funny cat shirt"
+        assert trend_report.entries[0].source == "seed_fallback"
+        assert trend_report.geo == "US"
+
+        # Verify: TrendEntry has required fields (query is minimum)
+        for entry in trend_report.entries:
+            assert isinstance(entry, TrendEntry)
+            assert entry.query is not None
+            assert entry.query != ""
+
+        # Run NicheAnalyzer (consumes TrendReport)
+        analyzer = NicheAnalyzerAgent(config)
+        niche_report = await analyzer.analyze_trends(
+            trend_report, min_score=0.0
+        )
+
+        # Verify: NicheReport is valid even from degraded mode
+        assert isinstance(niche_report, NicheReport)
+        assert len(niche_report.entries) == 2
+
+        # Verify: NicheEntry objects are properly formed
+        for entry in niche_report.entries:
+            assert isinstance(entry, NicheEntry)
+            assert entry.niche_name is not None
+            assert entry.trending_query is not None
+            assert isinstance(entry.score, NicheScore)
+            # Score should be calculated (not default/empty)
+            assert 1 <= entry.score.opportunity_score <= 10
+
+    @pytest.mark.asyncio
+    @patch("app.integrations.pytrends_client.TrendReq")
+    @patch("app.agents.niche_analyzer.PoeClient")
+    async def test_degraded_mode_with_llm_failure(
+        self, MockPoe: MagicMock, MockTrendReq: MagicMock
+    ):
+        """Test that pipeline survives even when LLM fails in NicheAnalyzer."""
+        from pytrends.exceptions import ResponseError
+
+        # Setup: Complete pytrends failure
+        mock_response = MagicMock()
+        mock_instance = MockTrendReq.return_value
+        mock_instance.trending_searches.side_effect = ResponseError(
+            "404 error", mock_response
+        )
+        mock_instance.daily_trends.side_effect = ResponseError(
+            "API error", mock_response
+        )
+        mock_instance.related_queries.return_value = []
+        mock_instance.interest_over_time.return_value = (0, 0.0)
+
+        # Setup: LLM fails
+        mock_poe = MockPoe.return_value
+        mock_poe.call_llm_text = AsyncMock(side_effect=Exception("LLM down"))
+
+        config = MagicMock()
+        config.min_niche_score = 0.0
+        config.llm_model = "gpt-4o"
+        config.max_tokens = 4000
+        config.temperature = 0.7
+
+        # Run pipeline
+        scout = TrendScoutAgent(config)
+        trend_report = await scout.discover_trends(
+            seed_keywords=["test keyword"], geo="US"
+        )
+
+        analyzer = NicheAnalyzerAgent(config)
+        niche_report = await analyzer.analyze_trends(trend_report, min_score=0.0)
+
+        # Verify: Pipeline didn't crash, produced valid NicheReport
+        assert isinstance(niche_report, NicheReport)
+        assert len(niche_report.entries) == 1
+        # Fallback values used when LLM fails
+        assert niche_report.entries[0].audience == "General consumers"
