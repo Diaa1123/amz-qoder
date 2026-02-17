@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 
 from app.config import AppConfig
-from app.orchestrator import create_pipeline, daily_pipeline, weekly_pipeline
+from app.orchestrator import run_create, run_daily, run_weekly
 from app.utils.logger import get_logger
 
 
@@ -38,15 +37,15 @@ def main() -> None:
     logger.info("Running %s pipeline via CLI", args.mode)
 
     if args.mode == "daily":
-        result = asyncio.run(daily_pipeline(config))
+        result = asyncio.run(run_daily(config))
         logger.info("Done. Niches found: %d", len(result.entries))
 
     elif args.mode == "weekly":
-        record_ids = asyncio.run(weekly_pipeline(config))
+        record_ids = asyncio.run(run_weekly(config))
         logger.info("Done. Ideas published: %d", len(record_ids))
 
     elif args.mode == "create":
-        rec_id = asyncio.run(create_pipeline(config, args.keyword))
+        rec_id = asyncio.run(run_create(config, args.keyword))
         if rec_id:
             logger.info("Done. Airtable record: %s", rec_id)
         else:

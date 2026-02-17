@@ -15,20 +15,20 @@ _scheduler: AsyncIOScheduler | None = None
 
 
 async def _daily_job(config: AppConfig) -> None:
-    from app.orchestrator import daily_pipeline
+    from app.orchestrator import run_daily
 
     try:
-        report = await daily_pipeline(config)
+        report = await run_daily(config)
         logger.info("Scheduled daily job: %d niches", len(report.entries))
     except Exception:
         logger.exception("Scheduled daily job failed")
 
 
 async def _weekly_job(config: AppConfig) -> None:
-    from app.orchestrator import weekly_pipeline
+    from app.orchestrator import run_weekly
 
     try:
-        ids = await weekly_pipeline(config)
+        ids = await run_weekly(config)
         logger.info("Scheduled weekly job: %d ideas published", len(ids))
     except Exception:
         logger.exception("Scheduled weekly job failed")

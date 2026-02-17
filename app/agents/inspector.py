@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
+
 from app.config import AppConfig
 from app.integrations.poe_client import PoeClient
 from app.schemas import ComplianceReport, DesignPrompt, IdeaPackage
@@ -23,13 +25,21 @@ Amazon Merch policies prohibit:
 - Personal information
 - Misleading claims (FDA, official, licensed -- unless true)
 
-Respond with JSON:
+Respond with JSON matching this exact schema (no extra fields):
 {
   "compliant": true/false,
   "issues": ["list of specific issues found"],
   "notes": "overall assessment"
 }
 """
+
+
+class _ComplianceLLMResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    compliant: bool
+    issues: list[str]
+    notes: str
 
 
 class InspectorAgent:
@@ -77,11 +87,10 @@ class InspectorAgent:
             notes_parts.append(f"BANNED terms found: {', '.join(banned)}")
         if risk:
             notes_parts.append(f"Risk terms found: {', '.join(risk)}")
-        if llm_result.get("notes"):
-            notes_parts.append(f"LLM: {llm_result['notes']}")
-        if llm_result.get("issues"):
+        notes_parts.append(f"LLM: {llm_result.notes}")
+        if llm_result.issues:
             notes_parts.append(
-                f"LLM issues: {'; '.join(llm_result['issues'])}",
+                f"LLM issues: {'; '.join(llm_result.issues)}",
             )
         if not notes_parts:
             notes_parts.append("All checks passed. No issues detected.")
@@ -108,16 +117,14 @@ class InspectorAgent:
         self,
         banned: list[str],
         risk: list[str],
-        llm_result: dict,
+        llm_result: _ComplianceLLMResponse,
     ) -> Literal["approved", "rejected", "needs_review"]:
         # Banned terms -> always reject
         if banned:
             return "rejected"
 
-        llm_compliant = llm_result.get("compliant", True)
-
         # LLM says non-compliant -> reject
-        if not llm_compliant:
+        if not llm_result.compliant:
             return "rejected"
 
         # Risk terms found but LLM says compliant -> needs review
@@ -130,25 +137,29 @@ class InspectorAgent:
         self,
         idea: IdeaPackage,
         prompt: DesignPrompt,
-    ) -> dict:
-        """Run LLM compliance review. Returns dict with 'compliant', 'issues', 'notes'."""
+    ) -> _ComplianceLLMResponse:
+        """Run LLM compliance review. Returns a typed response."""
         try:
-            import json
-
             user_msg = (
                 f"Title: {idea.final_approved_title}\n"
-                f"Bullet Points: {chr(10).join(idea.final_approved_bullet_points)}\n"
-                f"Description: {idea.final_approved_description}\n"
+                f"Bullet Points:\n"
+                + "\n".join(f"- {bp}" for bp in idea.final_approved_bullet_points)
+                + f"\nDescription: {idea.final_approved_description}\n"
                 f"Keywords: {', '.join(idea.final_approved_keywords_tags)}\n"
                 f"Design Prompt: {prompt.prompt_text}\n"
                 f"Color/Mood: {prompt.color_mood_notes or 'N/A'}\n"
             )
 
-            raw = await self._poe.call_llm_text(
+            result = await self._poe.call_llm(
                 system_prompt=_SYSTEM_PROMPT,
                 user_message=user_msg,
+                response_model=_ComplianceLLMResponse,
             )
-            return json.loads(raw)
+            return result  # type: ignore[return-value]
         except Exception:
             logger.warning("LLM compliance check failed, assuming compliant")
-            return {"compliant": True, "issues": [], "notes": "LLM check unavailable"}
+            return _ComplianceLLMResponse(
+                compliant=True,
+                issues=[],
+                notes="LLM check unavailable",
+            )

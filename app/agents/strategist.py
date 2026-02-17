@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from pydantic import BaseModel, ConfigDict
+
 from app.config import AppConfig
 from app.integrations.poe_client import PoeClient
 from app.schemas import IdeaPackage, NicheEntry
@@ -23,6 +25,16 @@ Rules:
 - Design style: a short phrase describing the visual direction.
 - NEVER reference trademarked brands, characters, or copyrighted material.
 """
+
+
+class _StrategyLLMResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    bullet_points: list[str]
+    description: str
+    keywords: list[str]
+    design_style: str
 
 
 class StrategistAgent:
@@ -65,15 +77,3 @@ class StrategistAgent:
         )
         logger.info("Strategist created IdeaPackage for '%s'", idea.niche_name)
         return idea
-
-
-# Internal LLM response model (not exported in schemas)
-from pydantic import BaseModel  # noqa: E402
-
-
-class _StrategyLLMResponse(BaseModel):
-    title: str
-    bullet_points: list[str]
-    description: str
-    keywords: list[str]
-    design_style: str

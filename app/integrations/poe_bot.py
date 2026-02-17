@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import AsyncIterable
 
 import fastapi_poe as fp
 
 from app.config import AppConfig
-from app.orchestrator import create_pipeline, daily_pipeline, weekly_pipeline
+from app.orchestrator import run_create, run_daily, run_weekly
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +25,9 @@ _HELP_TEXT = """\
 class DesignyPoeBot(fp.PoeBot):
     """Poe bot for AMZ_Designy pipeline control."""
 
-    def __init__(self, config: AppConfig | None = None) -> None:
+    def __init__(self, config: AppConfig) -> None:
         super().__init__()
-        self._config = config or AppConfig()  # type: ignore[call-arg]
+        self._config = config
 
     async def get_response(
         self,
@@ -47,8 +46,8 @@ class DesignyPoeBot(fp.PoeBot):
             result = await self._handle_weekly()
             yield fp.PartialResponse(text=result)
 
-        elif last_msg.startswith("/create "):
-            keyword = last_msg[len("/create "):].strip()
+        elif last_msg.startswith("/create"):
+            keyword = last_msg[len("/create"):].strip()
             if not keyword:
                 yield fp.PartialResponse(
                     text="Usage: `/create <keyword>`",
@@ -70,7 +69,7 @@ class DesignyPoeBot(fp.PoeBot):
 
     async def _handle_daily(self) -> str:
         try:
-            report = await daily_pipeline(self._config)
+            report = await run_daily(self._config)
             return (
                 f"Daily pipeline complete.\n"
                 f"Niches found: {len(report.entries)}"
@@ -81,7 +80,7 @@ class DesignyPoeBot(fp.PoeBot):
 
     async def _handle_weekly(self) -> str:
         try:
-            record_ids = await weekly_pipeline(self._config)
+            record_ids = await run_weekly(self._config)
             return (
                 f"Weekly pipeline complete.\n"
                 f"Ideas published: {len(record_ids)}"
@@ -92,7 +91,7 @@ class DesignyPoeBot(fp.PoeBot):
 
     async def _handle_create(self, keyword: str) -> str:
         try:
-            rec_id = await create_pipeline(self._config, keyword)
+            rec_id = await run_create(self._config, keyword)
             if rec_id:
                 return f"Design package created. Airtable record: {rec_id}"
             return "Design package created but not approved for Airtable."

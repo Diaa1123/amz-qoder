@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -16,10 +17,14 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _load_config() -> AppConfig:
+    return AppConfig()  # type: ignore[call-arg]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start scheduler on startup, stop on shutdown."""
-    config = AppConfig()  # type: ignore[call-arg]
+    config = _load_config()
     init_scheduler(config)
     logger.info("AMZ_Designy server started")
     yield
@@ -35,13 +40,7 @@ async def health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
-# Poe webhook
-_config = None
-try:
-    _config = AppConfig()  # type: ignore[call-arg]
-except Exception:
-    pass  # Config loaded at lifespan; this is for the bot route setup
-
-if _config is not None:
-    poe_bot = DesignyPoeBot(_config)
-    app.post("/poe/webhook")(poe_bot.get_endpoint())
+# Poe webhook -- registered at module level (Railway env vars always present).
+_config = _load_config()
+_bot = DesignyPoeBot(_config)
+app.add_api_route("/poe/webhook", _bot.get_endpoint(), methods=["POST"])

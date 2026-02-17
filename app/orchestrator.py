@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from app.agents.designer import DesignerAgent
 from app.agents.inspector import InspectorAgent
@@ -23,7 +23,7 @@ _DEFAULT_SEEDS = [
 ]
 
 
-async def daily_pipeline(config: AppConfig) -> NicheReport:
+async def run_daily(config: AppConfig) -> NicheReport:
     """Daily pipeline: TrendScout -> NicheAnalyzer -> Airtable Weekly Niche.
 
     Returns the NicheReport.
@@ -42,7 +42,7 @@ async def daily_pipeline(config: AppConfig) -> NicheReport:
 
     # Derive week start (Monday of current week)
     today = date.today()
-    week_start = today - __import__("datetime").timedelta(days=today.weekday())
+    week_start = today - timedelta(days=today.weekday())
 
     for entry in niche_report.entries:
         try:
@@ -58,7 +58,7 @@ async def daily_pipeline(config: AppConfig) -> NicheReport:
     return niche_report
 
 
-async def weekly_pipeline(config: AppConfig) -> list[str]:
+async def run_weekly(config: AppConfig) -> list[str]:
     """Weekly pipeline: full end-to-end for top niches.
 
     Returns list of Airtable record IDs for created ideas.
@@ -92,7 +92,7 @@ async def weekly_pipeline(config: AppConfig) -> list[str]:
             prompt = await designer.create_design_prompt(idea)
             report = await inspector.inspect(idea, prompt)
 
-            # Always write local output
+            # Always write local output first
             await writer.write_package(
                 trend_name=trend_name,
                 concept_index=idx,
@@ -103,7 +103,7 @@ async def weekly_pipeline(config: AppConfig) -> list[str]:
                 compliance_report=report,
             )
 
-            # Only write to Airtable if approved
+            # Then write to Airtable (only if approved)
             if report.compliance_status == "approved":
                 rec_id = await airtable.write_idea(
                     run_date=run_date,
@@ -132,7 +132,7 @@ async def weekly_pipeline(config: AppConfig) -> list[str]:
     return record_ids
 
 
-async def create_pipeline(config: AppConfig, keyword: str) -> str:
+async def run_create(config: AppConfig, keyword: str) -> str:
     """On-demand pipeline for a single keyword.
 
     Returns the Airtable record ID (empty string if not approved).
@@ -168,6 +168,7 @@ async def create_pipeline(config: AppConfig, keyword: str) -> str:
     prompt = await designer.create_design_prompt(idea)
     report = await inspector.inspect(idea, prompt)
 
+    # Write local output first
     await writer.write_package(
         trend_name=trend_name,
         concept_index=1,
@@ -178,6 +179,7 @@ async def create_pipeline(config: AppConfig, keyword: str) -> str:
         compliance_report=report,
     )
 
+    # Then write to Airtable
     if report.compliance_status == "approved":
         rec_id = await airtable.write_idea(
             run_date=run_date,

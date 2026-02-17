@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from pydantic import BaseModel, ConfigDict
+
 from app.config import AppConfig
 from app.integrations.poe_client import PoeClient
 from app.schemas import DesignPrompt, IdeaPackage
@@ -22,6 +24,13 @@ Rules:
 - Focus on generic themes that evoke the intended mood.
 - Describe the design as centered, suitable for dark or light shirt backgrounds.
 """
+
+
+class _DesignLLMResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_text: str
+    color_mood_notes: str
 
 
 class DesignerAgent:
@@ -65,12 +74,3 @@ class DesignerAgent:
             "Designer created DesignPrompt for '%s'", prompt.idea_niche_name,
         )
         return prompt
-
-
-# Internal LLM response model
-from pydantic import BaseModel  # noqa: E402
-
-
-class _DesignLLMResponse(BaseModel):
-    prompt_text: str
-    color_mood_notes: str
