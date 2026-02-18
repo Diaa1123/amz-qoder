@@ -37,14 +37,30 @@ async def run_daily(config: AppConfig) -> NicheReport:
     writer = OutputWriter(config)
     airtable = AirtableClient(config)
 
+    # Phase 1: Discover trends
+    logger.info("Daily pipeline: Discovering trends...")
     trend_report = await scout.discover_trends(seed_keywords=_DEFAULT_SEEDS)
+    logger.info(
+        "Daily pipeline TrendReport entries count = %d",
+        len(trend_report.entries),
+    )
+
+    # Phase 2: Analyze niches
+    logger.info("Daily pipeline: Analyzing niches...")
     niche_report = await analyzer.analyze_trends(
         trend_report, min_score=config.min_niche_score,
     )
+    logger.info(
+        "Daily pipeline NicheReport entries count = %d",
+        len(niche_report.entries),
+    )
 
-    # Write outputs to disk BEFORE Airtable (preserve artifacts on failure)
-    await writer.write_daily_report(run_date, trend_report, niche_report)
+    # Phase 3: Write outputs to disk BEFORE Airtable (preserve artifacts on failure)
+    logger.info("Writing daily report...")
+    report_path = await writer.write_daily_report(run_date, trend_report, niche_report)
+    logger.info("Daily report written successfully: path=%s", report_path)
 
+    # Phase 4: Write to Airtable
     # Derive week start (Monday of current week)
     today = date.today()
     week_start = today - timedelta(days=today.weekday())

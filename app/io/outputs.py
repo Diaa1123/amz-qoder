@@ -43,14 +43,32 @@ class OutputWriter:
         out_dir = self._output_dir / "daily" / run_date.isoformat()
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        logger.info(
+            "Writing daily report files: trends=%d, niches=%d, path=%s",
+            len(trend_report.entries),
+            len(niche_report.entries),
+            out_dir,
+        )
+
         # Write JSON artifacts
-        self._write_json(out_dir / "trend_report.json", trend_report)
-        self._write_json(out_dir / "niche_report.json", niche_report)
+        trend_path = out_dir / "trend_report.json"
+        niche_path = out_dir / "niche_report.json"
+        summary_path = out_dir / "summary.txt"
+
+        self._write_json(trend_path, trend_report)
+        logger.debug("Written: %s", trend_path)
+
+        self._write_json(niche_path, niche_report)
+        logger.debug("Written: %s", niche_path)
 
         # Write summary text
         self._write_daily_summary(run_date, trend_report, niche_report, out_dir)
+        logger.debug("Written: %s", summary_path)
 
-        logger.info("Daily report written to %s", out_dir)
+        logger.info(
+            "Daily report written successfully: path=%s, files=[trend_report.json, niche_report.json, summary.txt]",
+            out_dir,
+        )
         return out_dir
 
     def _write_daily_summary(

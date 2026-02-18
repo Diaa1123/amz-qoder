@@ -101,12 +101,10 @@ class TestRunDaily:
         with (
             patch("app.orchestrator.TrendScoutAgent") as MockScout,
             patch("app.orchestrator.NicheAnalyzerAgent") as MockAnalyzer,
+            patch("app.orchestrator.OutputWriter") as MockWriter,
             patch("app.orchestrator.AirtableClient") as MockAirtable,
         ):
-            mock_pytrends = _mock_pytrends()
-            mock_poe = _mock_poe_client()
-
-            from app.schemas import TrendEntry
+            from app.schemas import NicheEntry, NicheScore, TrendEntry
 
             scout = MockScout.return_value
             scout.discover_trends = AsyncMock(
@@ -123,6 +121,9 @@ class TestRunDaily:
                 return_value=NicheReport(entries=[], created_at=datetime.now()),
             )
 
+            writer = MockWriter.return_value
+            writer.write_daily_report = AsyncMock(return_value=tmp_path / "daily")
+
             airtable = MockAirtable.return_value
             airtable.write_weekly_niche = AsyncMock(return_value="rec_123")
 
@@ -131,6 +132,98 @@ class TestRunDaily:
             assert isinstance(report, NicheReport)
             scout.discover_trends.assert_called_once()
             analyzer.analyze_trends.assert_called_once()
+            writer.write_daily_report.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_daily_writes_niche_report_to_disk(self, tmp_path: Path):
+        """Verify that daily folder contains niche_report.json with correct niches count."""
+        from datetime import date
+        import json
+
+        config = _make_config(tmp_path)
+
+        with (
+            patch("app.orchestrator.TrendScoutAgent") as MockScout,
+            patch("app.orchestrator.NicheAnalyzerAgent") as MockAnalyzer,
+            patch("app.orchestrator.AirtableClient") as MockAirtable,
+        ):
+            from app.schemas import NicheEntry, NicheScore, TrendEntry
+
+            # Setup: 2 trends -> 2 niches
+            scout = MockScout.return_value
+            scout.discover_trends = AsyncMock(
+                return_value=TrendReport(
+                    entries=[
+                        TrendEntry(query="funny cat shirt", volume=50000, growth_rate=25.0),
+                        TrendEntry(query="retro gaming tee", volume=40000, growth_rate=20.0),
+                    ],
+                    created_at=datetime.now(),
+                ),
+            )
+
+            niche_entry_1 = NicheEntry(
+                niche_name="Funny Cat",
+                trending_query="funny cat shirt",
+                score=NicheScore(
+                    commercial_intent=9, designability=8, audience_size=8,
+                    competition_level=4, seasonality_risk=3, trademark_risk=2,
+                ),
+                audience="Cat lovers",
+                analysis_summary="Strong niche.",
+            )
+            niche_entry_2 = NicheEntry(
+                niche_name="Retro Gaming",
+                trending_query="retro gaming tee",
+                score=NicheScore(
+                    commercial_intent=8, designability=9, audience_size=7,
+                    competition_level=5, seasonality_risk=2, trademark_risk=3,
+                ),
+                audience="Gamers",
+                analysis_summary="Good niche.",
+            )
+
+            analyzer = MockAnalyzer.return_value
+            analyzer.analyze_trends = AsyncMock(
+                return_value=NicheReport(
+                    entries=[niche_entry_1, niche_entry_2],
+                    created_at=datetime.now(),
+                ),
+            )
+
+            airtable = MockAirtable.return_value
+            airtable.write_weekly_niche = AsyncMock(return_value="rec_123")
+
+            # Run the pipeline
+            report = await run_daily(config)
+
+            # Verify: NicheReport has 2 entries
+            assert len(report.entries) == 2
+
+            # Verify: Files were written to disk
+            daily_dir = tmp_path / "daily" / date.today().isoformat()
+            assert daily_dir.exists(), f"Daily directory not found: {daily_dir}"
+
+            # Verify: trend_report.json exists and is valid
+            trend_report_path = daily_dir / "trend_report.json"
+            assert trend_report_path.exists(), "trend_report.json not found"
+            with open(trend_report_path) as f:
+                trend_data = json.load(f)
+            assert len(trend_data["entries"]) == 2
+
+            # Verify: niche_report.json exists and contains 2 niches
+            niche_report_path = daily_dir / "niche_report.json"
+            assert niche_report_path.exists(), "niche_report.json not found"
+            with open(niche_report_path) as f:
+                niche_data = json.load(f)
+            assert len(niche_data["entries"]) == 2, f"Expected 2 niches, got {len(niche_data['entries'])}"
+
+            # Verify: summary.txt exists
+            summary_path = daily_dir / "summary.txt"
+            assert summary_path.exists(), "summary.txt not found"
+            summary_content = summary_path.read_text()
+            assert "Niches Analyzed: 2" in summary_content
+            assert "Funny Cat" in summary_content
+            assert "Retro Gaming" in summary_content
 
 
 # ---------------------------------------------------------------------------
