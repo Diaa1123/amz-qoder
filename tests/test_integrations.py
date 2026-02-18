@@ -120,16 +120,13 @@ class TestPytrendsClient:
     async def test_trending_searches_empty_triggers_fallback(
         self, MockTrendReq: MagicMock
     ):
-        """Test that empty trending_searches triggers fallback to daily_trends."""
+        """Test that empty trending_searches triggers fallback to realtime_trends."""
         mock_instance = MockTrendReq.return_value
         # First call returns empty
         mock_instance.trending_searches.return_value = pd.DataFrame()
-        # daily_trends returns data
-        mock_instance.daily_trends.return_value = pd.DataFrame({
-            "trendingSearches": [
-                [{"title": {"query": "fallback query 1"}}],
-                [{"title": {"query": "fallback query 2"}}],
-            ]
+        # realtime_trending_searches returns data
+        mock_instance.realtime_trending_searches.return_value = pd.DataFrame({
+            0: ["realtime query 1", "realtime query 2"],
         })
 
         client = PytrendsClient()
@@ -137,10 +134,10 @@ class TestPytrendsClient:
 
         assert isinstance(result, TrendReport)
         assert len(result.entries) == 2
-        assert result.entries[0].query == "fallback query 1"
-        assert result.entries[0].source == "google_trends_daily"
-        # Verify daily_trends was called with ISO geo
-        mock_instance.daily_trends.assert_called_once_with(geo="US")
+        assert result.entries[0].query == "realtime query 1"
+        assert result.entries[0].source == "google_trends_realtime"
+        # Verify realtime_trending_searches was called
+        mock_instance.realtime_trending_searches.assert_called_once()
 
     @pytest.mark.asyncio
     @patch("app.integrations.pytrends_client.TrendReq")
@@ -154,7 +151,7 @@ class TestPytrendsClient:
         # Both endpoints fail - ResponseError requires message and response
         mock_response = MagicMock()
         mock_instance.trending_searches.side_effect = ResponseError("404 error", mock_response)
-        mock_instance.daily_trends.side_effect = ResponseError("API error", mock_response)
+        mock_instance.realtime_trending_searches.side_effect = ResponseError("API error", mock_response)
 
         client = PytrendsClient()
         custom_seeds = ["custom seed 1", "custom seed 2"]

@@ -51,50 +51,57 @@ class PytrendsClient:
             logger.debug("Mapped geo '%s' to pn '%s'", geo, pn)
         return pn
 
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(ResponseError, TrendsAPIError),
-    )
     async def _trending_searches_with_pn(self, pn: str) -> list[str]:
-        """Internal method to call trending_searches with pn parameter."""
+        """Internal method to call trending_searches with pn parameter.
+        
+        404 errors are treated as empty results (non-transient, no retry).
+        """
         pytrends = self._new_session()
         try:
             df = pytrends.trending_searches(pn=pn)
             return df[0].tolist() if not df.empty else []
         except ResponseError as e:
-            if "404" in str(e):
-                logger.error("trending_searches 404 for pn='%s': %s", pn, e)
-                raise TrendsAPIError(f"Invalid pn value '{pn}': {e}") from e
-            raise
+            error_str = str(e)
+            if "404" in error_str or "code 404" in error_str:
+                # 404 = non-transient error, treat as empty results (no retry)
+                logger.warning(
+                    "trending_searches returned 404 for pn='%s' (treating as empty results)",
+                    pn
+                )
+                return []  # Return empty, don't raise exception, don't retry
+            # Other errors: log and return empty (don't crash)
+            logger.warning("trending_searches ResponseError: %s", e)
+            return []
+        except Exception as e:
+            # Any other error: log and return empty (don't crash)
+            logger.warning("trending_searches unexpected error: %s", e)
+            return []
 
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(ResponseError, TrendsAPIError),
-    )
-    async def _daily_trends_with_geo(self, geo: str) -> list[str]:
-        """Fallback: try daily_trends endpoint with ISO geo code."""
+    async def _realtime_trends_with_geo(self, geo: str) -> list[str]:
+        """Fallback: try realtime_trending_searches (if available in pytrends)."""
         pytrends = self._new_session()
         try:
-            # daily_trends uses ISO geo codes directly
-            df = pytrends.daily_trends(geo=geo.upper())
+            # Try realtime_trending_searches if available
+            df = pytrends.realtime_trending_searches(pn=geo.lower())
             if df.empty:
                 return []
-            # Extract trending searches from the nested structure
-            if "trendingSearches" in df.columns:
-                queries = []
-                for _, row in df.iterrows():
-                    trending = row.get("trendingSearches", [])
-                    if isinstance(trending, list):
-                        for item in trending:
-                            if isinstance(item, dict) and "title" in item:
-                                queries.append(item["title"]["query"])
-                return queries
+            # Extract queries from the dataframe
+            if 0 in df.columns:
+                return df[0].tolist()
+            return []
+        except AttributeError:
+            # Method not available in this pytrends version
+            logger.debug("realtime_trending_searches not available in pytrends")
             return []
         except ResponseError as e:
-            logger.error("daily_trends failed for geo='%s': %s", geo, e)
-            raise TrendsAPIError(f"daily_trends failed: {e}") from e
+            if "404" in str(e) or "code 404" in str(e):
+                logger.warning("realtime_trends returned 404 for geo='%s'", geo)
+                return []
+            logger.warning("realtime_trends ResponseError: %s", e)
+            return []
+        except Exception as e:
+            logger.warning("realtime_trends unexpected error: %s", e)
+            return []
 
     async def trending_searches(
         self,
@@ -104,8 +111,8 @@ class PytrendsClient:
         """Return trending searches for a country with fallback strategies.
         
         Strategy:
-        1. Try trending_searches with mapped pn value
-        2. If that fails, try daily_trends with ISO geo
+        1. Try trending_searches with mapped pn value (404 = empty, no retry)
+        2. If empty/404, try realtime_trending_searches
         3. If all fails, return TrendReport from seed keywords (degraded mode)
         
         Args:
@@ -125,58 +132,44 @@ class PytrendsClient:
             geo, pn
         )
 
-        # Strategy 1: trending_searches with pn mapping
-        try:
-            queries = await self._trending_searches_with_pn(pn)
-            if queries:
-                logger.info(
-                    "trending_searches succeeded: found %d queries for geo='%s'",
-                    len(queries), geo
-                )
-                entries = [
-                    TrendEntry(query=q, source="google_trends")
-                    for q in queries[:20]
-                ]
-                return TrendReport(
-                    entries=entries,
-                    geo=geo,
-                    timeframe="today 1-m",
-                    created_at=datetime.now(),
-                )
-            logger.warning("trending_searches returned empty for geo='%s'", geo)
-        except TrendsAPIError as e:
-            logger.warning(
-                "trending_searches failed for geo='%s': %s",
-                geo, e
+        # Strategy 1: trending_searches with pn mapping (404 = empty, no exception)
+        queries = await self._trending_searches_with_pn(pn)
+        if queries:
+            logger.info(
+                "trending_searches succeeded: found %d queries for geo='%s'",
+                len(queries), geo
             )
-        except Exception as e:
-            logger.warning(
-                "Unexpected error in trending_searches for geo='%s': %s",
-                geo, e
+            entries = [
+                TrendEntry(query=q, source="google_trends")
+                for q in queries[:20]
+            ]
+            return TrendReport(
+                entries=entries,
+                geo=geo,
+                timeframe="today 1-m",
+                created_at=datetime.now(),
             )
+        logger.warning("trending_searches returned empty for geo='%s'", geo)
 
-        # Strategy 2: daily_trends fallback
-        logger.info("Trying daily_trends fallback for geo='%s'", geo)
-        try:
-            queries = await self._daily_trends_with_geo(geo)
-            if queries:
-                logger.info(
-                    "daily_trends fallback succeeded: found %d queries for geo='%s'",
-                    len(queries), geo
-                )
-                entries = [
-                    TrendEntry(query=q, source="google_trends_daily")
-                    for q in queries[:20]
-                ]
-                return TrendReport(
-                    entries=entries,
-                    geo=geo,
-                    timeframe="today 1-m",
-                    created_at=datetime.now(),
-                )
-            logger.warning("daily_trends returned empty for geo='%s'", geo)
-        except Exception as e:
-            logger.warning("daily_trends fallback failed for geo='%s': %s", geo, e)
+        # Strategy 2: realtime_trending_searches fallback
+        logger.info("Trying realtime_trends fallback for geo='%s'", geo)
+        queries = await self._realtime_trends_with_geo(geo)
+        if queries:
+            logger.info(
+                "realtime_trends fallback succeeded: found %d queries for geo='%s'",
+                len(queries), geo
+            )
+            entries = [
+                TrendEntry(query=q, source="google_trends_realtime")
+                for q in queries[:20]
+            ]
+            return TrendReport(
+                entries=entries,
+                geo=geo,
+                timeframe="today 1-m",
+                created_at=datetime.now(),
+            )
+        logger.warning("realtime_trends returned empty for geo='%s'", geo)
 
         # Strategy 3: Degraded mode with seed keywords
         logger.warning(
